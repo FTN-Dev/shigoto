@@ -1,36 +1,114 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 仕事 Shigoto — AI-Powered Task Manager
 
-## Getting Started
+> **Manage your energy, not just your time.**
 
-First, run the development server:
+Shigoto is a smart task management dashboard built with Next.js 16, Supabase, and Google Gemini AI. It automatically categorises your tasks by cognitive load (Deep Focus, Shallow Work, Zombie Mode), tracks your streaks, and generates personalised motivational coaching.
 
+---
+
+## ✨ Features
+
+- **AI Task Parsing** — describe a task in natural language; AI extracts title, description & deadline
+- **AI Prioritisation** — one-click Gemini-powered categorisation of pending tasks
+- **Energy-Based Board** — 🔥 Deep Focus / ⚡ Shallow Work / 🧟 Zombie Mode columns
+- **Analytics Dashboard** — pie, line & bar charts via Recharts
+- **GitHub-style Streak Heatmap** — yearly contribution graph with per-day tooltips
+- **AI Motivational Coach** — a daily quote tuned to your completion trend
+- **Dark / Light Mode** — persisted via `next-themes`
+- **Real-time Updates** — Supabase Postgres CDC subscription
+
+---
+
+## 🚀 Getting Started Locally
+
+### 1. Clone the repo
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone https://github.com/FTN-Dev/shigoto.git
+cd shigoto
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. Install dependencies
+```bash
+npm install
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 3. Set up environment variables
+```bash
+cp .env.example .env.local
+```
+Then fill in your values in `.env.local`:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Variable | Where to get it |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase → Project Settings → API |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase → Project Settings → API |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | [Google AI Studio](https://aistudio.google.com/app/apikey) |
 
-## Learn More
+### 4. Set up the Supabase `tasks` table
+Run this SQL in the **Supabase SQL Editor**:
+```sql
+CREATE TABLE IF NOT EXISTS tasks (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  title         text NOT NULL,
+  description   text,
+  energy_level  text NOT NULL DEFAULT 'pending',
+  status        text NOT NULL DEFAULT 'todo',
+  deadline      timestamptz,
+  completed_at  timestamptz
+);
+```
 
-To learn more about Next.js, take a look at the following resources:
+### 5. Run the dev server
+```bash
+npm run dev
+```
+Open [http://localhost:3000](http://localhost:3000).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## ☁️ Deploying to Vercel
 
-## Deploy on Vercel
+1. Push this repo to GitHub (already done if you're reading this on GitHub)
+2. Go to [vercel.com/new](https://vercel.com/new) → **Import Git Repository** → select `FTN-Dev/shigoto`
+3. Under **Environment Variables**, add all three keys from your `.env.local`
+4. Click **Deploy** — Vercel auto-detects Next.js, no extra config needed
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+---
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## 🛠 Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Framework | Next.js 16 (App Router) |
+| Styling | Tailwind CSS + shadcn/ui |
+| Database | Supabase (PostgreSQL) |
+| AI | Google Gemini via `@ai-sdk/google` |
+| Charts | Recharts |
+| Theme | next-themes |
+
+---
+
+## 📁 Project Structure
+
+```
+src/
+├── app/
+│   ├── api/
+│   │   ├── prioritize/   # AI task categorisation stream
+│   │   ├── parse-task/   # AI task natural language parser
+│   │   └── quote/        # AI motivational quote generator
+│   ├── globals.css
+│   ├── layout.tsx
+│   └── page.tsx          # Main dashboard
+├── components/
+│   ├── CreateTaskDialog.tsx
+│   ├── GithubCalendar.tsx
+│   ├── TaskCard.tsx
+│   ├── ThemeProvider.tsx
+│   └── ThemeToggle.tsx
+├── lib/
+│   └── supabase.ts
+└── types/
+    └── index.ts
+```
