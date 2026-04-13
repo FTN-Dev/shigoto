@@ -1,5 +1,10 @@
 'use client'
 
+// Tell Next.js this page must always render at request time (never at build
+// time). Required because we read Supabase env vars and use real-time hooks
+// that are not available during Vercel's static prerender phase.
+export const dynamic = 'force-dynamic'
+
 import { useEffect, useRef, useState, useMemo } from 'react'
 import { useTheme } from 'next-themes'
 import { supabase } from '@/lib/supabase'
