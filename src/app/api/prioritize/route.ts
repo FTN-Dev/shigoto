@@ -35,12 +35,13 @@ export async function POST(req: NextRequest) {
     .join('\n')
 
   const prompt = `You are a productivity expert categorizing tasks for "Shigoto".
-Current date/time: ${now.toLocaleString()}
+ENERGY LEVEL RULES:
+Deadlines are the ABSOLUTE authority. Do NOT override the deadline rule because of task complexity.
+- "deep"    → due ≤ 5 days. Must be urgently completed within the week.
+- "shallow" → due 6–14 days. Still has a week or two left.
+- "zombie"  → due ≥ 15 days or no deadline. Safely in the future.
 
-ENERGY LEVEL RULES (urgency takes priority over complexity):
-- "deep"    → due ≤ 5 days, OR cognitively demanding (coding, research, writing, math)
-- "shallow" → due 6–14 days, OR moderate effort (emails, reviews, admin, meetings)  
-- "zombie"  → due ≥ 15 days or no deadline, low effort (data entry, formatting, lookups)
+Secondary Rule: Only if two tasks have the EXACT SAME urgency, mark the harder one higher. Otherwise, strictly obey the deadlines provided!
 
 Tasks to categorize:
 ${taskList}

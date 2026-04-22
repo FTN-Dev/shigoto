@@ -30,8 +30,8 @@ export default function LoginPage() {
       setError(error.message)
       setLoading(false)
     } else {
-      router.push('/dashboard')
-      router.refresh()
+      // Hard redirect to clear router cache
+      window.location.href = '/dashboard'
     }
   }
 

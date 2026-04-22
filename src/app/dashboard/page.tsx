@@ -113,16 +113,15 @@ export default function Home() {
   const isDark = resolvedTheme === 'dark'
 
   const handleSignOut = async () => {
-    // Explicitly wipe state to prevent Next.js client-side router caching
-    // from showing the previous user's data when logging in with a new account.
     setTasks([])
     setCompletedTasks([])
     setUserEmail(null)
     setUserId(null)
     setAiStream('')
     await supabase.auth.signOut()
-    router.push('/login')
-    router.refresh()
+    // Hard redirect completely destroys the Next.js client-side cache
+    // preventing any ghost data from carrying over to the next login session.
+    window.location.href = '/login'
   }
 
   /* ─────────────────────────────────────────────────────────────────────────
@@ -131,17 +130,31 @@ export default function Home() {
    *  2. Supabase RLS policy on the DB ← server-side enforcement
    * ───────────────────────────────────────────────────────────────────────── */
 
+  /* ─────────────────────────────────────────────────────────────────────────
+   * DATA LAYER
+   * ───────────────────────────────────────────────────────────────────────── */
+
   const checkAutoPromotions = async (currentTasks: Task[], uid: string) => {
     let needsRefresh = false
     const now = new Date()
+    
     for (const task of currentTasks) {
-      if (!task.deadline || task.energy_level === 'pending') continue
+      if (!task.deadline) continue
+      
       const daysUntilDue = (new Date(task.deadline).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
       let targetEnergy = task.energy_level
-      if (task.energy_level === 'zombie' && daysUntilDue <= 14 && daysUntilDue > 5) targetEnergy = 'shallow'
-      else if ((task.energy_level === 'zombie' || task.energy_level === 'shallow') && daysUntilDue <= 5) targetEnergy = 'deep'
+      
+      // Auto-promotion rules strictly based on approaching deadlines:
+      // Overdue or <= 5 days -> must be Deep Focus
+      if (daysUntilDue <= 5 && targetEnergy !== 'deep') {
+        targetEnergy = 'deep'
+      } 
+      // 6 to 14 days -> must be at least Shallow Work
+      else if (daysUntilDue > 5 && daysUntilDue <= 14 && targetEnergy === 'zombie') {
+        targetEnergy = 'shallow'
+      }
+      
       if (targetEnergy !== task.energy_level) {
-        // RLS guarantees only own tasks are mutated; .eq is extra safety
         await supabase.from('tasks').update({ energy_level: targetEnergy })
           .eq('id', task.id)
           .eq('user_id', uid)
