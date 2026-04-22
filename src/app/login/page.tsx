@@ -2,28 +2,23 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { Flame, Mail, Lock, Eye, EyeOff, Loader2, Chrome, ArrowLeft, AlertCircle } from 'lucide-react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { Flame, Mail, Lock, Eye, EyeOff, Loader2, ArrowLeft, AlertCircle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { ThemeToggle } from '@/components/ThemeToggle'
-import { useTheme } from 'next-themes'
 
 export default function LoginPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const supabase = createClient()
-  const { resolvedTheme } = useTheme()
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPass, setShowPass] = useState(false)
   const [loading, setLoading] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => { setMounted(true) }, [])
-
-  const isDark = mounted && resolvedTheme === 'dark'
+  const [error, setError] = useState(searchParams.get('error') ?? '')
+  const [successMsg, setSuccessMsg] = useState(searchParams.get('message') ?? '')
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -51,7 +46,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className={`min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 transition-colors duration-300`}>
+    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 transition-colors duration-300">
 
       {/* Nav strip */}
       <div className="flex items-center justify-between px-4 md:px-8 py-4">
@@ -76,6 +71,16 @@ export default function LoginPage() {
 
           {/* Auth card */}
           <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-xl shadow-slate-200/60 dark:shadow-slate-900/60 border border-slate-200 dark:border-slate-800 p-8 space-y-5">
+
+            {/* Success message (e.g. after email confirmed) */}
+            {successMsg && (
+              <div className="flex items-start gap-2.5 p-3 rounded-xl bg-green-50 dark:bg-green-950/40 border border-green-100 dark:border-green-900/50">
+                <div className="h-4 w-4 rounded-full bg-green-500 shrink-0 mt-0.5 flex items-center justify-center">
+                  <span className="text-white text-[9px] font-bold">✓</span>
+                </div>
+                <p className="text-xs text-green-700 dark:text-green-400 leading-relaxed">{successMsg}</p>
+              </div>
+            )}
 
             {/* Google OAuth */}
             <button

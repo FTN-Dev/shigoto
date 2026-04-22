@@ -1,8 +1,23 @@
 import Link from 'next/link'
+import { redirect } from 'next/navigation'
 import { Flame, Wand2, Brain, BarChart3, GitCommitHorizontal, Zap, ArrowRight, CheckCircle2 } from 'lucide-react'
 import { ThemeToggle } from '@/components/ThemeToggle'
 
-export default function LandingPage() {
+// If Supabase email confirmation lands here with ?code=... (happens when
+// Site URL is localhost), forward it to the real callback handler.
+export default async function LandingPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ code?: string; error?: string; error_description?: string }>
+}) {
+  const params = await searchParams
+  if (params.code) {
+    redirect(`/auth/callback?code=${params.code}`)
+  }
+  if (params.error) {
+    redirect(`/login?error=${encodeURIComponent(params.error_description ?? params.error)}`)
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors duration-300 flex flex-col">
 
