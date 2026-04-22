@@ -104,6 +104,7 @@ export default function Home() {
   const [aiStream, setAiStream] = useState('')
   const [aiQuote, setAiQuote] = useState<{ quote: string; loading: boolean }>({ quote: '', loading: true })
   const [userEmail, setUserEmail] = useState<string | null>(null)
+  const [userId, setUserId] = useState<string | null>(null)
   const [showUserMenu, setShowUserMenu] = useState(false)
 
   const streamRef = useRef<HTMLDivElement>(null)
@@ -117,8 +118,13 @@ export default function Home() {
     router.refresh()
   }
 
-  /* ─── helpers ─────────────────────────────────────────────────────────── */
-  const checkAutoPromotions = async (currentTasks: Task[]) => {
+  /* ─────────────────────────────────────────────────────────────────────────
+   * DATA LAYER — every query is scoped to the current user in two ways:
+   *  1. Explicit .eq('user_id', uid)  ← defence-in-depth, instant
+   *  2. Supabase RLS policy on the DB ← server-side enforcement
+   * ───────────────────────────────────────────────────────────────────────── */
+
+  const checkAutoPromotions = async (currentTasks: Task[], uid: string) => {
     let needsRefresh = false
     const now = new Date()
     for (const task of currentTasks) {
@@ -128,21 +134,35 @@ export default function Home() {
       if (task.energy_level === 'zombie' && daysUntilDue <= 14 && daysUntilDue > 5) targetEnergy = 'shallow'
       else if ((task.energy_level === 'zombie' || task.energy_level === 'shallow') && daysUntilDue <= 5) targetEnergy = 'deep'
       if (targetEnergy !== task.energy_level) {
-        await supabase.from('tasks').update({ energy_level: targetEnergy }).eq('id', task.id)
+        // RLS guarantees only own tasks are mutated; .eq is extra safety
+        await supabase.from('tasks').update({ energy_level: targetEnergy })
+          .eq('id', task.id)
+          .eq('user_id', uid)
         needsRefresh = true
       }
     }
-    if (needsRefresh) await fetchTasks()
+    if (needsRefresh) fetchTasksForUser(uid)
   }
 
-  const fetchTasks = async () => {
-    const { data } = await supabase.from('tasks').select('*').order('created_at', { ascending: true })
+  // Renamed to make the uid dependency explicit
+  const fetchTasksForUser = async (uid: string) => {
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('*')
+      .eq('user_id', uid)          // ← explicit user scope
+      .order('created_at', { ascending: true })
+    if (error) { console.error('fetchTasks error:', error.message); return }
     if (data) {
       setTasks(data.filter(t => t.status === 'todo'))
       setCompletedTasks(data.filter(t => t.status === 'done'))
-      checkAutoPromotions(data.filter(t => t.status === 'todo'))
+      checkAutoPromotions(data.filter(t => t.status === 'todo'), uid)
     }
   }
+
+  // Stable wrapper used by callbacks that don't receive uid directly
+  const fetchTasks = useCallback(() => {
+    if (userId) fetchTasksForUser(userId)
+  }, [userId])
 
   const fetchQuote = async (trend: 'up' | 'down', total: number, recent: number) => {
     setAiQuote({ quote: '', loading: true })
@@ -160,11 +180,15 @@ export default function Home() {
   }
 
   const completeTask = async (id: string) => {
-    await supabase.from('tasks').update({ status: 'done', completed_at: new Date().toISOString() }).eq('id', id)
+    await supabase.from('tasks')
+      .update({ status: 'done', completed_at: new Date().toISOString() })
+      .eq('id', id)
     fetchTasks()
   }
   const restoreTask = async (id: string) => {
-    await supabase.from('tasks').update({ status: 'todo', completed_at: null }).eq('id', id)
+    await supabase.from('tasks')
+      .update({ status: 'todo', completed_at: null })
+      .eq('id', id)
     fetchTasks()
   }
   const deleteTask = async (id: string) => {
@@ -172,8 +196,12 @@ export default function Home() {
     fetchTasks()
   }
   const addTasks = async (newTasks: Task[]) => {
-    const { error } = await supabase.from('tasks').insert(newTasks)
-    if (!error) fetchTasks()
+    if (!userId) return
+    // Explicitly stamp user_id on every row — don't rely solely on DB DEFAULT
+    const rows = newTasks.map(t => ({ ...t, user_id: userId }))
+    const { error } = await supabase.from('tasks').insert(rows)
+    if (error) { console.error('addTasks error:', error.message); return }
+    fetchTasksForUser(userId)
   }
 
   const runAIPrioritization = async () => {
@@ -215,15 +243,36 @@ export default function Home() {
   }
 
   useEffect(() => {
+    // ── 1. Identify the current user first ──────────────────────────────────
     supabase.auth.getUser().then(({ data }) => {
-      setUserEmail(data.user?.email ?? null)
+      const user = data.user
+      if (!user) { router.push('/login'); return }
+
+      setUserEmail(user.email ?? null)
+      setUserId(user.id)
+
+      // ── 2. Initial data fetch scoped to this user ────────────────────────
+      fetchTasksForUser(user.id)
+
+      // ── 3. Real-time subscription filtered to this user's rows only ──────
+      const channel = supabase
+        .channel(`tasks-${user.id}`)           // unique channel per user
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'tasks',
+            filter: `user_id=eq.${user.id}`,  // ← only receive own rows
+          },
+          () => fetchTasksForUser(user.id)
+        )
+        .subscribe()
+
+      // Cleanup on unmount / user change
+      return () => { supabase.removeChannel(channel) }
     })
-    fetchTasks()
-    const channel = supabase.channel('tasks-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, fetchTasks)
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ─── analytics ───────────────────────────────────────────────────────── */
   const analyticsData = useMemo(() => {
