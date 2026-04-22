@@ -2,75 +2,77 @@ import { google } from '@ai-sdk/google'
 import { streamText } from 'ai'
 import { NextRequest } from 'next/server'
 
-// Use gemini-2.0-flash — it streams tokens immediately without a "thinking" phase.
-// gemini-2.5-flash has extended internal reasoning that can silently delay the
-// first token by 30–60 s, making the UI appear frozen for short task lists.
-const MODEL = google('gemini-2.0-flash')
-
 export async function POST(req: NextRequest) {
-  const { tasks } = await req.json()
+  let tasks: { id: string; title: string; deadline?: string | null }[]
+
+  try {
+    const body = await req.json()
+    tasks = body.tasks
+  } catch {
+    return Response.json({ error: 'Invalid request body' }, { status: 400 })
+  }
 
   if (!tasks || tasks.length === 0) {
-    return new Response(JSON.stringify({ error: 'No tasks provided' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    })
+    return Response.json({ error: 'No tasks provided' }, { status: 400 })
   }
 
   const now = new Date()
 
   const taskList = tasks
-    .map((t: { id: string; title: string; deadline?: string | null }) => {
+    .map(t => {
       let deadlineStr = 'no deadline'
       if (t.deadline) {
         const dl = new Date(t.deadline)
         const days = Math.round((dl.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
         deadlineStr = `${dl.toLocaleDateString('en-GB')} (${
-          days > 0 ? `${days} days away` : days === 0 ? 'TODAY' : `${Math.abs(days)} days OVERDUE`
+          days > 0 ? `${days} days away`
+          : days === 0 ? 'TODAY'
+          : `${Math.abs(days)} days OVERDUE`
         })`
       }
       return `  • [${t.id}] "${t.title}" — Deadline: ${deadlineStr}`
     })
     .join('\n')
 
-  const prompt = `You are a productivity expert helping categorize tasks into energy levels for the app "Shigoto".
+  const prompt = `You are a productivity expert categorizing tasks for "Shigoto".
 Current date/time: ${now.toLocaleString()}
 
-ENERGY LEVEL RULES (deadline urgency takes priority):
-- "deep"    → due within 5 days, OR cognitively demanding (coding, research, writing, strategy)
-- "shallow" → due in 6–14 days, OR moderate effort (emails, reviews, admin, meetings)
-- "zombie"  → due in 15+ days or no deadline, low effort (data entry, formatting, simple lookups)
+ENERGY LEVEL RULES (urgency takes priority over complexity):
+- "deep"    → due ≤ 5 days, OR cognitively demanding (coding, research, writing, math)
+- "shallow" → due 6–14 days, OR moderate effort (emails, reviews, admin, meetings)  
+- "zombie"  → due ≥ 15 days or no deadline, low effort (data entry, formatting, lookups)
 
 Tasks to categorize:
 ${taskList}
 
-Instructions:
-1. Think through each task briefly — mention deadline urgency and task complexity.
-2. State your decision.
-3. After analyzing ALL tasks, output ONLY this JSON block and nothing after it:
+Think through each task briefly, then output ONLY this JSON block with NO text after it:
 
 \`\`\`json
 [{"id":"<task-id>","energy_level":"<deep|shallow|zombie>","reason":"<one sentence>"}]
 \`\`\`
 
-Begin:`
+Begin analysis:`
 
   try {
-    const result = streamText({ model: MODEL, prompt })
+    // gemini-2.0-flash: streams immediately, no thinking phase
+    const result = streamText({
+      model: google('gemini-2.0-flash'),
+      prompt,
+      maxTokens: 2048,
+    })
+
+    const encoder = new TextEncoder()
 
     const stream = new ReadableStream({
       async start(controller) {
-        const encoder = new TextEncoder()
         try {
           for await (const chunk of result.textStream) {
             controller.enqueue(encoder.encode(chunk))
           }
-        } catch (err) {
-          // Stream error — send a machine-readable error marker so the client
-          // can show a helpful message rather than an infinite spinner.
-          controller.enqueue(
-            encoder.encode(`\n\n[STREAM_ERROR] ${err instanceof Error ? err.message : 'Unknown error'}`)
-          )
+        } catch (streamErr) {
+          const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr)
+          console.error('[prioritize] stream error:', errMsg)
+          controller.enqueue(encoder.encode(`\n\n[STREAM_ERROR] ${errMsg}`))
         } finally {
           controller.close()
         }
@@ -78,13 +80,14 @@ Begin:`
     })
 
     return new Response(stream, {
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+      },
     })
   } catch (err) {
-    console.error('Prioritize API error:', err)
-    return new Response(
-      JSON.stringify({ error: err instanceof Error ? err.message : 'AI request failed' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    )
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[prioritize] setup error:', msg)
+    return Response.json({ error: msg }, { status: 500 })
   }
 }
