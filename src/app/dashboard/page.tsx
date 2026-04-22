@@ -207,37 +207,94 @@ export default function Home() {
   const runAIPrioritization = async () => {
     const pendingTasks = tasks.filter(t => t.energy_level === 'pending')
     if (pendingTasks.length === 0) return alert('No pending tasks to prioritize!')
+
     setPrioritizing(true)
-    setAiStream('')
+    setAiStream('⏳ Connecting to AI...')
     setActiveTab('board')
+
+    // Timeout: if no token arrives within 30 s, surface a clear error
+    const TIMEOUT_MS = 30_000
+    let firstTokenReceived = false
+    const timeoutId = setTimeout(() => {
+      if (!firstTokenReceived) {
+        setAiStream(
+          '⚠️ The AI is taking longer than expected.\n\n' +
+          'This can happen when the model is under heavy load.\n' +
+          'Please try again in a moment.'
+        )
+        setPrioritizing(false)
+      }
+    }, TIMEOUT_MS)
+
     try {
       const res = await fetch('/api/prioritize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tasks: pendingTasks }),
       })
-      if (!res.ok || !res.body) throw new Error('Stream failed')
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+        throw new Error(body.error ?? `HTTP ${res.status}`)
+      }
+      if (!res.body) throw new Error('No response body')
+
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let fullText = ''
+
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        fullText += decoder.decode(value, { stream: true })
+
+        const chunk = decoder.decode(value, { stream: true })
+
+        // First token received — clear the "connecting" placeholder
+        if (!firstTokenReceived) {
+          firstTokenReceived = true
+          clearTimeout(timeoutId)
+          fullText = ''
+        }
+
+        fullText += chunk
         setAiStream(fullText)
         if (streamRef.current) streamRef.current.scrollTop = streamRef.current.scrollHeight
+
+        // Detect server-side stream error marker sent by the API
+        if (fullText.includes('[STREAM_ERROR]')) {
+          const msg = fullText.split('[STREAM_ERROR]')[1]?.trim() ?? 'Unknown error'
+          setAiStream(`❌ AI error: ${msg}\n\nPlease try again.`)
+          setPrioritizing(false)
+          return
+        }
       }
+
+      // Parse categorization JSON from the completed stream
       const jsonMatch = fullText.match(/```json\s*([\s\S]*?)\s*```/)
       if (jsonMatch) {
-        const categorized: { id: string; energy_level: string }[] = JSON.parse(jsonMatch[1])
-        await Promise.all(categorized.map(({ id, energy_level }) =>
-          supabase.from('tasks').update({ energy_level }).eq('id', id)
-        ))
-        await fetchTasks()
+        try {
+          const categorized: { id: string; energy_level: string }[] = JSON.parse(jsonMatch[1])
+          await Promise.all(
+            categorized.map(({ id, energy_level }) =>
+              supabase.from('tasks').update({ energy_level }).eq('id', id)
+            )
+          )
+          await fetchTasks()
+          setAiStream(prev => prev + '\n\n✅ Tasks categorized successfully!')
+        } catch {
+          setAiStream(prev => prev + '\n\n⚠️ Could not parse AI output. Tasks were not updated.')
+        }
+      } else if (fullText.trim()) {
+        // AI responded but didn't include a JSON block
+        setAiStream(prev => prev + '\n\n⚠️ AI did not return a JSON block. No tasks were updated.')
       }
-    } catch {
-      alert('AI prioritization failed.')
+
+    } catch (err) {
+      clearTimeout(timeoutId)
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      setAiStream(`❌ Failed to reach the AI: ${msg}\n\nCheck your internet connection and try again.`)
     } finally {
+      clearTimeout(timeoutId)
       setPrioritizing(false)
     }
   }
