@@ -113,6 +113,13 @@ export default function Home() {
   const isDark = resolvedTheme === 'dark'
 
   const handleSignOut = async () => {
+    // Explicitly wipe state to prevent Next.js client-side router caching
+    // from showing the previous user's data when logging in with a new account.
+    setTasks([])
+    setCompletedTasks([])
+    setUserEmail(null)
+    setUserId(null)
+    setAiStream('')
     await supabase.auth.signOut()
     router.push('/login')
     router.refresh()
@@ -276,7 +283,11 @@ export default function Home() {
           const categorized: { id: string; energy_level: string }[] = JSON.parse(jsonMatch[1])
           await Promise.all(
             categorized.map(({ id, energy_level }) =>
-              supabase.from('tasks').update({ energy_level }).eq('id', id)
+              // Also scope this explicitly to user_id to prevent any cross-account leak
+              supabase.from('tasks')
+                .update({ energy_level })
+                .eq('id', id)
+                .eq('user_id', userId)
             )
           )
           await fetchTasks()

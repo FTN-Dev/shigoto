@@ -54,9 +54,9 @@ Think through each task briefly, then output ONLY this JSON block with NO text a
 Begin analysis:`
 
   try {
-    // gemini-2.0-flash: streams immediately, no thinking phase
+    // gemini-1.5-flash is supported by all SDK versions (avoids dev server restart bugs)
     const result = streamText({
-      model: google('gemini-2.0-flash'),
+      model: google('gemini-1.5-flash'),
       prompt,
       maxTokens: 2048,
     })
