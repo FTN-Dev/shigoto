@@ -144,55 +144,55 @@ export default function Home() {
    * DATA LAYER
    * ───────────────────────────────────────────────────────────────────────── */
 
-  const checkAutoPromotions = async (currentTasks: Task[], uid: string) => {
-    let needsRefresh = false
+  /* ─────────────────────────────────────────────────────────────────────────
+   * DATA LAYER — all reads/writes go through /api/tasks (server-side auth).
+   * The server uses createServerClient which reads HTTP cookies directly,
+   * bypassing any client-side session caching or singleton issues entirely.
+   * ───────────────────────────────────────────────────────────────────────── */
+
+  const checkAutoPromotions = async (currentTasks: Task[]) => {
     const now = new Date()
-    
+    const promotions: Promise<unknown>[] = []
     for (const task of currentTasks) {
       if (!task.deadline) continue
-      
-      const daysUntilDue = (new Date(task.deadline).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
-      let targetEnergy = task.energy_level
-      
-      // Auto-promotion rules strictly based on approaching deadlines:
-      // Overdue or <= 5 days -> must be Deep Focus
-      if (daysUntilDue <= 5 && targetEnergy !== 'deep') {
-        targetEnergy = 'deep'
-      } 
-      // 6 to 14 days -> must be at least Shallow Work
-      else if (daysUntilDue > 5 && daysUntilDue <= 14 && targetEnergy === 'zombie') {
-        targetEnergy = 'shallow'
-      }
-      
-      if (targetEnergy !== task.energy_level) {
-        await supabase.from('tasks').update({ energy_level: targetEnergy })
-          .eq('id', task.id)
-          .eq('user_id', uid)
-        needsRefresh = true
+      const days = (new Date(task.deadline).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+      let target = task.energy_level
+      if (days <= 5 && target !== 'deep') target = 'deep'
+      else if (days > 5 && days <= 14 && target === 'zombie') target = 'shallow'
+      if (target !== task.energy_level) {
+        promotions.push(
+          fetch('/api/tasks', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: task.id, energy_level: target }),
+          })
+        )
       }
     }
-    if (needsRefresh) fetchTasksForUser(uid)
+    if (promotions.length > 0) {
+      await Promise.all(promotions)
+      await fetchTasksForUser()
+    }
   }
 
-  // Renamed to make the uid dependency explicit
-  const fetchTasksForUser = async (uid: string) => {
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('*')
-      .eq('user_id', uid)          // ← explicit user scope
-      .order('created_at', { ascending: true })
-    if (error) { console.error('fetchTasks error:', error.message); return }
+  // Fetches tasks from the SERVER-SIDE API route.
+  // The server validates the session from HTTP cookies and returns only the
+  // current user's tasks — no client-side uid needed.
+  const fetchTasksForUser = async () => {
+    const res = await fetch('/api/tasks')
+    if (res.status === 401) { window.location.href = '/login'; return }
+    if (!res.ok) { console.error('fetchTasks failed:', res.status); return }
+    const { tasks: data, userId: serverUid } = await res.json()
+    // Sync the server-verified userId into state
+    if (serverUid && serverUid !== userId) setUserId(serverUid)
     if (data) {
-      setTasks(data.filter(t => t.status === 'todo'))
-      setCompletedTasks(data.filter(t => t.status === 'done'))
-      checkAutoPromotions(data.filter(t => t.status === 'todo'), uid)
+      setTasks(data.filter((t: Task) => t.status === 'todo'))
+      setCompletedTasks(data.filter((t: Task) => t.status === 'done'))
+      checkAutoPromotions(data.filter((t: Task) => t.status === 'todo'))
     }
   }
 
-  // Stable wrapper used by callbacks that don't receive uid directly
-  const fetchTasks = useCallback(() => {
-    if (userId) fetchTasksForUser(userId)
-  }, [userId])
+  const fetchTasks = useCallback(() => { fetchTasksForUser() }, [])
 
   const fetchQuote = async (trend: 'up' | 'down', total: number, recent: number) => {
     setAiQuote({ quote: '', loading: true })
@@ -210,28 +210,38 @@ export default function Home() {
   }
 
   const completeTask = async (id: string) => {
-    await supabase.from('tasks')
-      .update({ status: 'done', completed_at: new Date().toISOString() })
-      .eq('id', id)
-    fetchTasks()
+    await fetch('/api/tasks', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status: 'done', completed_at: new Date().toISOString() }),
+    })
+    fetchTasksForUser()
   }
   const restoreTask = async (id: string) => {
-    await supabase.from('tasks')
-      .update({ status: 'todo', completed_at: null })
-      .eq('id', id)
-    fetchTasks()
+    await fetch('/api/tasks', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status: 'todo', completed_at: null }),
+    })
+    fetchTasksForUser()
   }
   const deleteTask = async (id: string) => {
-    await supabase.from('tasks').delete().eq('id', id)
-    fetchTasks()
+    await fetch('/api/tasks', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+    fetchTasksForUser()
   }
   const addTasks = async (newTasks: Task[]) => {
-    if (!userId) return
-    // Explicitly stamp user_id on every row — don't rely solely on DB DEFAULT
-    const rows = newTasks.map(t => ({ ...t, user_id: userId }))
-    const { error } = await supabase.from('tasks').insert(rows)
-    if (error) { console.error('addTasks error:', error.message); return }
-    fetchTasksForUser(userId)
+    // user_id is stamped server-side — no need for client-side userId state here
+    const res = await fetch('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newTasks),
+    })
+    if (!res.ok) { console.error('addTasks error:', await res.text()); return }
+    fetchTasksForUser()
   }
 
   const runAIPrioritization = async () => {
@@ -306,14 +316,14 @@ export default function Home() {
           const categorized: { id: string; energy_level: string }[] = JSON.parse(jsonMatch[1])
           await Promise.all(
             categorized.map(({ id, energy_level }) =>
-              // Also scope this explicitly to user_id to prevent any cross-account leak
-              supabase.from('tasks')
-                .update({ energy_level })
-                .eq('id', id)
-                .eq('user_id', userId)
+              fetch('/api/tasks', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id, energy_level }),
+              })
             )
           )
-          await fetchTasks()
+          await fetchTasksForUser()
           setAiStream(prev => prev + '\n\n✅ Tasks categorized successfully!')
         } catch {
           setAiStream(prev => prev + '\n\n⚠️ Could not parse AI output. Tasks were not updated.')
@@ -334,33 +344,38 @@ export default function Home() {
   }
 
   useEffect(() => {
-    // ── 1. Identify the current user first ──────────────────────────────────
-    supabase.auth.getUser().then(({ data }) => {
-      const user = data.user
-      if (!user) { router.push('/login'); return }
+    // Call the server-side API route first.
+    // The server reads HTTP cookies, validates the Supabase session, and returns
+    // the server-authoritative userId — bypassing all client-side cache issues.
+    fetch('/api/tasks').then(async res => {
+      if (res.status === 401) { window.location.href = '/login'; return }
+      if (!res.ok) { console.error('Initial fetch failed:', res.status); return }
 
-      setUserEmail(user.email ?? null)
-      setUserId(user.id)
+      const { tasks: data, userId: serverUid } = await res.json()
 
-      // ── 2. Initial data fetch scoped to this user ────────────────────────
-      fetchTasksForUser(user.id)
+      // Trust the server-returned userId (comes from HTTP cookies, not memory)
+      setUserId(serverUid)
 
-      // ── 3. Real-time subscription filtered to this user's rows only ──────
+      // Sync email display via client-side (non-critical, display only)
+      supabase.auth.getUser().then(({ data: d }) => {
+        setUserEmail(d.user?.email ?? null)
+      })
+
+      if (data) {
+        setTasks(data.filter((t: Task) => t.status === 'todo'))
+        setCompletedTasks(data.filter((t: Task) => t.status === 'done'))
+        checkAutoPromotions(data.filter((t: Task) => t.status === 'todo'))
+      }
+
+      // Realtime subscription — triggers a re-fetch via the secure API route
       const channel = supabase
-        .channel(`tasks-${user.id}`)           // unique channel per user
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'tasks',
-            filter: `user_id=eq.${user.id}`,  // ← only receive own rows
-          },
-          () => fetchTasksForUser(user.id)
+        .channel(`tasks-${serverUid}`)
+        .on('postgres_changes',
+          { event: '*', schema: 'public', table: 'tasks', filter: `user_id=eq.${serverUid}` },
+          () => fetchTasksForUser()
         )
         .subscribe()
 
-      // Cleanup on unmount / user change
       return () => { supabase.removeChannel(channel) }
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
