@@ -23,7 +23,7 @@ import {
 } from 'recharts'
 import { subDays, format, isSameDay, differenceInHours } from 'date-fns'
 
-const supabase = createClient()
+// ← supabase client is created INSIDE the component (see useMemo below)
 
 interface Task {
   id: string
@@ -96,6 +96,16 @@ function PieLegend({ data }: { data: { name: string; value: number; color: strin
 
 export default function Home() {
   const router = useRouter()
+
+  // ─── Supabase client created INSIDE the component ────────────────────────
+  // NEVER instantiate this at module level. A module-level singleton persists
+  // across login/logout cycles because Next.js never unloads the JS module
+  // between soft navigations. Creating it here with useMemo ensures each
+  // component mount gets a fresh client that reads current auth cookies,
+  // so RLS always evaluates against the correct user's session.
+  // ─────────────────────────────────────────────────────────────────────────
+  const supabase = useMemo(() => createClient(), [])
+
   const [tasks, setTasks] = useState<Task[]>([])
   const [completedTasks, setCompletedTasks] = useState<Task[]>([])
   const [prioritizing, setPrioritizing] = useState(false)
